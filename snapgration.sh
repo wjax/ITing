@@ -3,7 +3,7 @@
 # This Script creates a new snapshot in the source ZFS dataset and replicate source dataset into destination/backup dataset
 
 function usage {
-    echo "This script creates a new snapshot in the source ZFS and replicate it into destination/backup ZFS"
+    echo "This script creates a new snapshot in the source ZFS and replicates it into destination/backup ZFS if there are changes from last snapshot"
         echo ""
         echo "usage: snapgration.sh  source destination [-w=time] [-r=retention]"
     echo "  -w      wait seconds in case another instance is running. 0 if not provided"
@@ -86,6 +86,12 @@ else
     last_replicated_snapshot_in_source="$SRC"@${last_snapshot_in_destination#*@}
     zfsnap snapshot -rv -a "$RETENTION" "$SRC"
     latest_snapshot=$(zfs list -H -t snapshot -o name -S creation -d1 "$SRC" | head -1)
-    zfs send -RI "$last_replicated_snapshot_in_source" "$latest_snapshot" | zfs recv -Fu "$DST"
+    diff_snapshots=$(zfs diff "$last_replicated_snapshot_in_source" "$latest_snapshot")
+    if [ -n "$diff_snapshots" ]; then
+       echo "Changes exists. Replicate"
+       zfs send -RI "$last_replicated_snapshot_in_source" "$latest_snapshot" | zfs recv -Fu "$DST"
+    else
+       echo "No changes detected. No need to replicate"
+    fi
     zfsnap destroy -rv "$SRC"
 fi
