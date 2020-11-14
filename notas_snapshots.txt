@@ -1,0 +1,29 @@
+Crear Snapshot
+zfsnap snapshot -rv -p Snapshot -a 1h OS_BACKUP/DataSet
+zfsnap snapshot -rv -a 1h OS_BACKUP/DataSet
+
+Nombre del último
+$(zfs list -H -t snapshot -o name -S creation -d1 OS_BACKUP/DataSet | head -1)
+
+Replicar hasta el último. Sólo primera vez
+zfs send -R "$(zfs list -H -t snapshot -o name -S creation -d1 OS_BACKUP/DataSet | head -1)" | zfs recv -Fu OS_BACKUP/BackSet
+
+Borrar a partir del 3o
+zfs list -H -t snapshot -o name -S creation -d1 OS_BACKUP/DataSet | tail -n +4 | xargs -n 1 zfs destroy -r
+
+Borrar expirados con zfsnap
+zfsnap destroy -rv -p Snapshot OS_BACKUP/DataSet
+zfsnap destroy -rv OS_BACKUP/DataSet
+
+
+// Si se ha hecho una primera replicación total con:
+zfsnap snapshot -rv -a 1h OS_BACKUP/DataSet
+zfs send -R "$(zfs list -H -t snapshot -o name -S creation -d1 OS_BACKUP/DataSet | head -1)" | zfs recv -Fu OS_BACKUP/BackSet
+
+// Siguientes en base a cron o similar
+previous_snapshot_in_backup=$(zfs list -H -t snapshot -o name -S creation -d1 OS_BACKUP/DataSet | head -1)
+previous_snapshot_in_live=OS_BACKUP/DataSet@${string#*@}
+zfsnap snapshot -rv -a 1h OS_BACKUP/DataSet
+new_snapshot=$(zfs list -H -t snapshot -o name -S creation -d1 OS_BACKUP/DataSet | head -1)
+zfs send -RI "$previous_snapshot_in_live" "$new_snapshot" | zfs recv -Fu OS_BACKUP/BackSet
+zfsnap destroy -rv OS_BACKUP/DataSet
