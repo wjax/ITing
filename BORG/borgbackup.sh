@@ -15,6 +15,9 @@ trap 'echo $( date ) Backup interrupted >&2; exit 2' INT TERM
 
 info "Starting backup"
 
+prefix=$1
+shift
+
 borg create \
   --verbose \
   --filter AME \
@@ -22,8 +25,8 @@ borg create \
   --show-rc \
   --compression auto,zstd,9 \
   --exclude-caches \
-  ::"BACKUP-{now:%Y-%m-%d_%H-%M-%S}" \
-  '/TANK' \
+  ::"${prefix}-{now:%Y-%m-%d_%H-%M-%S}" \
+  "$@" \
   2>&1 | tee -a /var/log/borgbackup.log
 
 backup_exit=$?
@@ -32,7 +35,7 @@ info "Pruning repository"
 
 borg prune \
   --list \
-  --prefix 'TEST-' \
+  --prefix "${prefix}" \
   --show-rc \
   --keep-daily 7 \
   --keep-weekly 4 \
