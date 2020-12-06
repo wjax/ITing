@@ -38,125 +38,72 @@
 # 9)  Release the holds.
 # 10) Destroy the snapshots.
 
-tmpfile=$(mktemp)
-savepwd=${PWD}
 
-mountpoint=$1
-shift
-pools=
-for it in $@
-do
-    [ ${it} == '--' ] && break
-    pools="${pools} ${it}"
-    shift
-done
+cleanup() {
+    set +e
+    cd ${savepwd}
+    [ $mounted ] && umount -R "$mountpoint"
+    [ $zfs_hold ] && zfs release -r "${snapname}" "${snapshot}"
+    [ $zfs_snapshot ] && zfs destroy -r "${snapshot}"
+    [ ! "$(ls -A $mountpoint)" ] && rm -rf "$mountpoint"
+}
 
-if [ "$1" == '--' ]
-then
-    shift
-else
-    >&2 echo "Supply me a command to run. I will cd to the root of the mount before running it."
-    exit 1
-fi
-snapname=backup-$(date -u +%s)
+# Setup things
+savepwd="${PWD}"
 
+# Mount point argument
+mountpoint="$1"
 if [ ! -d $mountpoint ]
 then
     >&2 echo "${mountpoint} doesn't exist."
     exit 1
 fi
+shift
 
-poolsnaps=
-for pool in $pools
-do
-    poolsnaps="${poolsnaps} ${pool}@${snapname}"
-done
+# Pool argument
+pool="$1"
+shift
 
 
-cleanup() {
-    set +e
-    cd ${savepwd}
-    if [ $mounted ]
-    then
-        for path in $(tac <<< $mountorder)
-        do
-                if [ -d ${path}/.zfs ]
-                then
-                        path=$(echo ${path} | tr -s /)
-                        relativepath=${path#"$basepath"}
-                        itemmountpoint=$(echo ${mountpoint}/${relativepath} | tr -s /)
+# Prepare mountpoint
+NEW_UUID=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
+mountpoint="$mountpoint/$NEW_UUID"
+mkdir "$mountpoint"
 
-#                       echo "umount ${itemmountpoint}"
-                        umount $(echo ${itemmountpoint} | tr -s /)
-                fi
-        done
-    fi
-    [ $zfs_hold ] && zfs release -r ${snapname} ${poolsnaps}
-    if [ $zfs_snapshot ]
-    then
-        for snap in ${poolsnaps}
-        do
-            zfs destroy -r ${snap}
-        done
-    fi
-    [ -f $tmpfile ] && rm $tmpfile
-}
-
+# Snapshot name
+snapname=backup-$(date -u +%s)
+# Pool/snapshot
+snapshot="${pool}@${snapname}"
 
 set -e
 trap cleanup INT TERM EXIT
 
+# Perform snapshot
 zfs_snapshot=1
-for snap in ${poolsnaps}
-do
-    zfs snapshot -r ${snap}
-done
+zfs snapshot -r "${snapshot}"
 
-zfs hold -r ${snapname} ${poolsnaps}
+# Hold this snapshot
+zfs hold -r "${snapname}" "${snapshot}"
 zfs_hold=1
 
-# find snapshots that are of mounted filesystems only
-allsnaps=$(zfs holds -Hr ${poolsnaps} | awk '{ print $1; }')
-cat <<EOF | sed -e "s/@${snapname}\$//g" | xargs zfs list -Hpo name,mountpoint | awk '$2 != "none" { print $0; }' > ${tmpfile}
-${allsnaps}
-EOF
+# List all snapshots recursively
+allsnaps=$(zfs holds -Hr "${snapshot}" | awk '{ print $1; }')
 
-# order the mounts.
-# we need to mount things shallow-first
-mountorder=$(while read name path
+# Mount snapshots
+
+for snap in $allsnaps
 do
-    if [ ${path} != '/' ]
-    then
-        echo "${name}|${path}|$(echo "${path}" | tr -dc / | wc -c)"
-    else
-        echo "${name}|${path}|0"
-    fi
-done < ${tmpfile} | sort -n -t\| -k3 -k2 | awk -F\| '{ print $2; }')
-
-rm ${tmpfile}
-
-#echo "${mountorder}"
-#IFS=0 read -r -a arraymountpoints <<< "${mountorder}"
-basepath=$(echo "${mountorder}" | cut -d$'\n' -f1)
-#echo ${mountorder%%"\n"}
-
-for path in ${mountorder}
-do
-    mounted=1
-    path=$(echo ${path} | tr -s /)
-    relativepath=${path#"$basepath"}
-    itemmountpoint=$(echo ${mountpoint}/${relativepath} | tr -s /)
-    if [ -d "${path}/.zfs" ]
-    then
-#       [ ! -d "${subpath}" ] && mkdir "${subpath}"
-#       echo "mount ${itemmountpoint}"
-        mount -o ro,bind $(echo "${path}/.zfs/snapshot/${snapname}" | tr -s /) "${itemmountpoint}"
-    else
-        # silently do nothing
-        echo "this path is unmounted, presumably because the canmount property is set to no"
-    fi
+   mounted=1
+   relativepath=${snap%@*}
+   relativepath=${relativepath#"$pool"}
+   itemmountpoint=$(echo ${mountpoint}/${relativepath} | tr -s /)
+   mount -t zfs,ro "$snap" "$itemmountpoint"
 done
 
-cd ${mountpoint}
+#Execute command
+cd "${mountpoint}"
+#echo $(pwd)
+eval "$@"
 
-"$@"
+# Clean and umount
+#cleanup
